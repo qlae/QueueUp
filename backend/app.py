@@ -1,38 +1,69 @@
-from flask import Flask, request, jsonify
+from flask import Flask, jsonify, request
 from flask_cors import CORS
+import sqlite3
 
 app = Flask(__name__)
 CORS(app)
 
-# This will hold the queue of songs (in memory)
-queue = []
+DATABASE = 'queueup.db'
 
-# Route to handle song requests (POST)
-@app.route("/api/request", methods=["POST"])
-def request_song():
-    data = request.get_json()  # Get the request data from the body
-    song = data.get("song")  # Extract the song name from the data
+def init_db():
+    with sqlite3.connect(DATABASE) as conn:
+        c = conn.cursor()
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS songs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                artist TEXT NOT NULL,
+                votes INTEGER DEFAULT 0
+            )
+        ''')
+        conn.commit()
 
-    if song:
-        # If song is provided, add it to the queue with 0 votes
-        queue.append({"song": song, "votes": 0})
-        print(f"Song added: {song}")  # Log the song that was added
-        return jsonify({"message": "Song received"}), 200  # Return success message
-    else:
-        # If no song is provided, return an error
-        return jsonify({"error": "No song provided"}), 400
+@app.route('/songs', methods=['GET'])
+def get_songs():
+    with sqlite3.connect(DATABASE) as conn:
+        c = conn.cursor()
+        c.execute('SELECT * FROM songs ORDER BY votes DESC')
+        songs = c.fetchall()
+        
+        # Format the response properly for the frontend
+        formatted_songs = []
+        for song in songs:
+            formatted_songs.append({
+                "id": song[0],
+                "title": song[1],
+                "artist": song[2],
+                "votes": song[3]
+            })
+        
+    return jsonify(formatted_songs)
 
-# Route to fetch the current song queue (GET)
-@app.route("/api/requests", methods=["GET"])
-def get_queue():
-    print("Returning queue:", queue)  # Log the queue when fetching
-    return jsonify(queue)  # Return the song queue in JSON format
+@app.route('/songs', methods=['POST'])
+def add_song():
+    data = request.json
+    title = data.get('title')
+    artist = data.get('artist')
 
-# Route to handle root URL (GET)
-@app.route("/", methods=["GET"])
-def home():
-    return jsonify({"message": "Welcome to the QueueUp backend!"})
+    with sqlite3.connect(DATABASE) as conn:
+        c = conn.cursor()
+        c.execute('INSERT INTO songs (title, artist, votes) VALUES (?, ?, 0)', (title, artist))
+        conn.commit()
+        song_id = c.lastrowid
 
-# Run the app
-if __name__ == "__main__":
-    app.run(debug=True, port=5000)  # Run the Flask app on port 5000
+    return jsonify({"id": song_id, "title": title, "artist": artist, "votes": 0})
+
+@app.route('/songs/<int:song_id>/vote', methods=['POST'])
+def vote_song(song_id):
+    with sqlite3.connect(DATABASE) as conn:
+        c = conn.cursor()
+        c.execute('UPDATE songs SET votes = votes + 1 WHERE id = ?', (song_id,))
+        conn.commit()
+        c.execute('SELECT * FROM songs WHERE id = ?', (song_id,))
+        updated_song = c.fetchone()
+
+    return jsonify({"id": updated_song[0], "title": updated_song[1], "artist": updated_song[2], "votes": updated_song[3]})
+
+if __name__ == '__main__':
+    init_db()
+    app.run(debug=True, port=5000)
